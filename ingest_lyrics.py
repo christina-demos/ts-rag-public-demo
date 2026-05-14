@@ -1,4 +1,5 @@
 from pathlib import Path
+import hashlib
 import pandas as pd
 import chromadb
 from chromadb.utils import embedding_functions
@@ -16,7 +17,7 @@ embedding_func = embedding_functions.SentenceTransformerEmbeddingFunction(
 try:
     client.delete_collection("taylor_lyrics")
     print("Old collection deleted.")
-except:
+except Exception:
     pass
 
 collection = client.create_collection(
@@ -24,37 +25,53 @@ collection = client.create_collection(
     embedding_function=embedding_func
 )
 
-# 4. Load all chunk CSVs
-chunk_files = Path("data/chunks").glob("*_chunks.csv")
+def make_chunk_id(row):
+    raw = f"{row['album']}|{row['song']}|{row['section']}|{row['text']}"
+    return hashlib.md5(raw.encode("utf-8")).hexdigest()
 
-global_id = 0
+# 4. Load all chunk CSVs
+chunk_files = sorted(Path("data/chunks").glob("*_chunks.csv"))
+
+total_chunks = 0
 
 for file in chunk_files:
     print(f"Ingesting {file.name}...")
 
     df = pd.read_csv(file)
 
-    collection.add(
-        documents=[
-            f"Song: {row['song']}\nAlbum: {row['album']}\nSection: {row['section']}\nLyrics:\n{row['text']}"
-            for _, row in df.iterrows()
-        ],
+    # Remove empty lyric chunks
+    df = df.dropna(subset=["text"])
 
-        metadatas=[
-            {
-                "song": row["song"],
-                "album": row["album"],
-                "section": row["section"]
-            }
-            for _, row in df.iterrows()
-        ],
+    # Remove duplicate rows inside CSV
+    df = df.drop_duplicates(subset=["album", "song", "section", "text"])
 
-        ids=[
-            f"chunk_{global_id + i}"
-            for i in range(len(df))
-        ]
+    documents = [
+        # Create one string per row
+        f"Song: {row['song']}\nAlbum: {row['album']}\nSection: {row['section']}\nLyrics:\n{row['text']}"
+        for _, row in df.iterrows()
+    ]
+
+    metadatas = [
+        {
+            "song": row["song"],
+            "album": row["album"],
+            "section": row["section"]
+        }
+        for _, row in df.iterrows()
+    ]
+
+    ids = [
+        make_chunk_id(row)
+        for _, row in df.iterrows()
+    ]
+
+    # Send everything to DB
+    collection.upsert(
+        documents=documents,
+        metadatas=metadatas,
+        ids=ids
     )
 
-    global_id += len(df)
+    total_chunks += len(df)
 
-print("Database populated!")
+print(f"Database populated with {total_chunks} chunks!")
