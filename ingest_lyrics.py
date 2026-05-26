@@ -37,15 +37,15 @@ def get_profile_text(profile):
     summary = profile.get("summary", "")
 
     return f"""
-        Song Profile:
-        Themes: {themes}
-        Moods: {moods}
-        Perspective: {perspective}
-        Speaker Role: {speaker_role}
-        Relationship Stage: {relationship_stage}
-        Situations: {situations}
-        Summary: {summary}
-        """.strip()
+    Song Profile:
+    Themes: {themes}
+    Moods: {moods}
+    Perspective: {perspective}
+    Speaker Role: {speaker_role}
+    Relationship Stage: {relationship_stage}
+    Situations: {situations}
+    Summary: {summary}
+    """.strip()
 
 
 # Generate ID using MD5 hash of row content, prevents duplicates upon re-running ingestion
@@ -114,15 +114,15 @@ def main():
             # Context Stuffing: Assemble text to convert into vector embeddings
             # Merges raw lyrics with AI song profiles, enables vector math to evaluate abstract emotional vibes 
             document = f"""
-                Song: {row['song']}
-                Album: {row['album']}
-                Section: {row['section']}
+            Song: {row['song']}
+            Album: {row['album']}
+            Section: {row['section']}
 
-                {profile_text}
+            {profile_text}
 
-                Lyrics:
-                {row['text']}
-                """.strip()
+            Lyrics:
+            {row['text']}
+            """.strip()
 
             documents.append(document)
 

@@ -285,7 +285,7 @@ def main():
     )
 
     # Execute search using a complex, implicit emotional scenario
-    query = "I'm tired of being walked all over, I'm rebranding myself as someone who calls out bad behavior"
+    query = "I just got dumped and it was a major blindside"
 
     candidates = retrieve_candidates(
         collection,
