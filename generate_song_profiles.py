@@ -7,25 +7,26 @@ from openai import OpenAI
 load_dotenv()
 
 # --- Configuration & Paths ---
-CHUNKS_DIR = Path("data/chunks")                 # Location of pre-processed CSV lyrics
-OUTPUT_FILE = Path("data/song_profiles.json")    # Target file to store generated profiles
-MODEL = "gpt-4o-mini"                            # OpenAI model optimized for structured JSON inference
+CHUNKS_DIR = Path("data/chunks")
+OUTPUT_FILE = Path("data/song_profiles.json")
+MODEL = "gpt-4o-mini"
 
 openai_client = OpenAI()
 
 
-# Group individual lyric chunks into a dictionary mapped by song to evaluate the tracks as whole units
 def load_songs():
+    """
+    Group lyric chunks back into full songs so the profile is based on the
+    song's overall narrative, not just one verse/chorus.
+    """
     songs = {}
 
     for file in sorted(CHUNKS_DIR.glob("*_chunks.csv")):
         df = pd.read_csv(file)
-        
-        # Data Cleaning: Drop rows missing text strings and handle duplicate row definitions
+
         df = df.dropna(subset=["text"])
         df = df.drop_duplicates(subset=["album", "song", "section", "text"])
 
-        # Iterate through album spreadsheet and append lyrics to their respective song buckets
         for _, row in df.iterrows():
             profile_key = f"{row['album']}|||{row['song']}"
 
@@ -41,7 +42,6 @@ def load_songs():
     return songs
 
 
-# Interact with OpenAI API to generate structured semantic profile
 def generate_profile(song, album, lyrics):
     lyrics_text = "\n\n".join(lyrics)
 
@@ -55,9 +55,10 @@ Lyrics:
 {lyrics_text}
 
 Important:
-- Identify not just the topic, but whose perspective the song is from.
-- For example, distinguish betrayed partner vs cheating partner vs regretful ex vs person leaving.
-- This profile will be used to match songs to user situations, so narrative POV matters.
+- Identify the narrator's role, not just the topic.
+- Separate who is hurt from who caused the hurt.
+- Separate active heartbreak from healed/reflected closure.
+- This profile will be used to match songs to user situations, so POV and timeline matter.
 
 Return JSON only in this exact format:
 {{
@@ -66,16 +67,29 @@ Return JSON only in this exact format:
   "themes": ["theme1", "theme2", "theme3"],
   "moods": ["mood1", "mood2"],
   "perspective": "short phrase describing narrator perspective",
-  "speaker_role": "betrayed partner | cheating partner | regretful ex | person leaving | person left behind | hopeful partner | conflicted narrator | other",
+
+  "speaker_role": "betrayed partner | cheating partner | regretful ex | person leaving | person left behind | hopeful partner | conflicted narrator | observer | other",
+
+  "narrator_agency": "initiator | recipient | mutual | observer | unclear",
+
+  "narrator_hurt_status": "hurt_by_other | hurting_other | self_blame | mutual_hurt | not_hurt | unclear",
+
   "relationship_stage": "pre-breakup | breakup | post-breakup | reconciliation | situationship | other",
+
+  "timeline_state": "before_event | during_crisis | immediate_aftermath | unresolved_grief | healing | moved_on | reflective_closure | unclear",
+
+  "good_for_user_roles": ["user role this song fits well"],
+  "bad_for_user_roles": ["user role this song does NOT fit"],
+
   "situations": ["situation1", "situation2", "situation3"],
+
   "summary": "1 sentence summary of what emotional situation this song fits"
 }}
 """
 
     response = openai_client.chat.completions.create(
         model=MODEL,
-        response_format={"type": "json_object"},  # Enforce strict JSON output schemas from LLM
+        response_format={"type": "json_object"},
         messages=[
             {
                 "role": "system",
@@ -86,7 +100,7 @@ Return JSON only in this exact format:
                 "content": prompt
             }
         ],
-        temperature=0.2  # Keep deterministic focus to ensure uniform classification formatting
+        temperature=0.1
     )
 
     return json.loads(response.choices[0].message.content)
@@ -98,7 +112,6 @@ def main():
 
     OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
 
-    # Checkpoint System: Load pre-existing data profiles to resume processing without re-billing APIs
     if OUTPUT_FILE.exists():
         with open(OUTPUT_FILE, "r", encoding="utf-8") as f:
             profiles = json.load(f)
@@ -106,23 +119,24 @@ def main():
     print(f"Found {len(songs)} songs.")
 
     for key, data in songs.items():
-        # Validate entry presence and schema updates to safely skip completed items
-        if key in profiles and "speaker_role" in profiles[key]:
+        # Use timeline_state as the schema-version marker.
+        # If this exists, the profile is already using the newer POV/timeline schema.
+        if key in profiles and "timeline_state" in profiles[key]:
             print(f"Skipping existing profile: {data['song']}")
             continue
 
         print(f"Generating profile: {data['song']}")
 
-        # Wrap response profile in fault-tolerant try-except block to guarantee incremental progress saves
         try:
             profile = generate_profile(
                 song=data["song"],
                 album=data["album"],
                 lyrics=data["lyrics"]
             )
+
             profiles[key] = profile
 
-            # Atomic Writing: Iteratively save profiles to disk to protect entries from crashes
+            # Save after every song so progress survives crashes/API errors.
             with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
                 json.dump(profiles, f, indent=2, ensure_ascii=False)
 
