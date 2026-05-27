@@ -6,15 +6,18 @@ import chromadb
 from chromadb.utils import embedding_functions
 
 # --- Configuration & Paths ---
-DB_PATH = "./swift_vec_db"           # Directory where ChromaDB will save data files
-COLLECTION_NAME = "taylor_lyrics"    # Vector database collection
-MODEL_NAME = "all-MiniLM-L6-v2"      # Transformer model
-CHUNKS_DIR = Path("data/chunks")     # Location of pre-processed CSV lyrics
-PROFILE_FILE = Path("data/song_profiles.json")  # Context data generated for songs
+DB_PATH = "./swift_vec_db"
+COLLECTION_NAME = "taylor_lyrics"
+MODEL_NAME = "all-MiniLM-L6-v2"
+CHUNKS_DIR = Path("data/chunks")
+PROFILE_FILE = Path("data/song_profiles.json")
 
 
-# Load song profiles (containing themes, moods, perspectives, etc.) if they exist to provide context
 def load_song_profiles():
+    """
+    Load song-level emotional/narrative profiles.
+    These profiles help the retriever understand POV and timeline.
+    """
     if not PROFILE_FILE.exists():
         print("No data/song_profiles.json found. Continuing without profiles.")
         return {}
@@ -23,129 +26,146 @@ def load_song_profiles():
         return json.load(f)
 
 
-# Reformat profile dictionary into easy-to-read text block
+def list_to_text(value):
+    """
+    Convert profile list fields into comma-separated strings.
+    Handles missing or non-list values safely.
+    """
+    if isinstance(value, list):
+        return ", ".join(str(item) for item in value)
+    if value is None:
+        return ""
+    return str(value)
+
+
 def get_profile_text(profile):
+    """
+    Convert song profile metadata into searchable text.
+
+    This text gets embedded along with each lyric chunk, so the vector search
+    can consider narrative role, timeline, and emotional context.
+    """
     if not profile:
         return ""
 
-    themes = ", ".join(profile.get("themes", []))
-    moods = ", ".join(profile.get("moods", []))
-    situations = ", ".join(profile.get("situations", []))
-    perspective = profile.get("perspective", "")
-    speaker_role = profile.get("speaker_role", "")
-    relationship_stage = profile.get("relationship_stage", "")
-    summary = profile.get("summary", "")
+    themes = list_to_text(profile.get("themes", []))
+    moods = list_to_text(profile.get("moods", []))
+    situations = list_to_text(profile.get("situations", []))
+    good_for_user_roles = list_to_text(profile.get("good_for_user_roles", []))
+    bad_for_user_roles = list_to_text(profile.get("bad_for_user_roles", []))
 
     return f"""
-    Song Profile:
-    Themes: {themes}
-    Moods: {moods}
-    Perspective: {perspective}
-    Speaker Role: {speaker_role}
-    Relationship Stage: {relationship_stage}
-    Situations: {situations}
-    Summary: {summary}
-    """.strip()
+Song Profile:
+Themes: {themes}
+Moods: {moods}
+Perspective: {profile.get("perspective", "")}
+Speaker Role: {profile.get("speaker_role", "")}
+Narrator Agency: {profile.get("narrator_agency", "")}
+Narrator Hurt Status: {profile.get("narrator_hurt_status", "")}
+Relationship Stage: {profile.get("relationship_stage", "")}
+Timeline State: {profile.get("timeline_state", "")}
+Good For User Roles: {good_for_user_roles}
+Bad For User Roles: {bad_for_user_roles}
+Situations: {situations}
+Summary: {profile.get("summary", "")}
+""".strip()
 
 
-# Generate ID using MD5 hash of row content, prevents duplicates upon re-running ingestion
 def make_chunk_id(row):
+    """
+    Create a stable ID from row content.
+
+    Stable IDs prevent accidental duplicate records when ingestion is rerun.
+    """
     raw = f"{row['album']}|{row['song']}|{row['section']}|{row['text']}"
     return hashlib.md5(raw.encode("utf-8")).hexdigest()
 
 
 def main():
-    # 1. Initialize ChromaDB Persistent Client
-    # Ensures vector database saves locally to disk instead of in-memory (RAM)
+    # 1. Connect to local persistent Chroma database.
     chroma_client = chromadb.PersistentClient(path=DB_PATH)
 
-    # 2. Set up Local Embedding Function
-    # Manages tokenization and embeddings
+    # 2. Use the same embedding model for ingestion and querying.
     embedding_func = embedding_functions.SentenceTransformerEmbeddingFunction(
         model_name=MODEL_NAME
     )
 
-    # 3. Reset Collection Lifecycle Management
-    # Deletes any existing collection
+    # 3. Delete old collection so updated profile-enriched documents replace old embeddings.
     try:
         chroma_client.delete_collection(COLLECTION_NAME)
         print("Old collection deleted.")
     except Exception:
         pass
 
-    # Instantiates fresh Chroma collection for storing lyric vectors + metadata
+    # 4. Create fresh collection for lyric vectors and metadata.
     collection = chroma_client.create_collection(
         name=COLLECTION_NAME,
         embedding_function=embedding_func
     )
 
-    # 4. Load External Thematic Profiles
+    # 5. Load song-level profiles.
     song_profiles = load_song_profiles()
 
-    # 5. Pipeline: Process and Ingest Local CSV Data Chunks
-    # Processes lyric chunk sheets alphabetically by album name
+    # 6. Load all chunk CSVs.
     chunk_files = sorted(CHUNKS_DIR.glob("*_chunks.csv"))
     total_chunks = 0
 
     for file in chunk_files:
         print(f"Ingesting {file.name}...")
 
-        # Read specific album chunk sheet into memory
         df = pd.read_csv(file)
 
-        # Data Cleaning: Drop rows missing lyrics
         df = df.dropna(subset=["text"])
-
-        # Data Deduplication: Filter out repeating row definitions to prevent redundant vector operations
         df = df.drop_duplicates(subset=["album", "song", "section", "text"])
 
-        # Initialize local batch arrays, ChromaDB's collection.add() demands all three
         documents = []
         metadatas = []
         ids = []
 
-        # Iterate over individual entries (rows) within album dataframe
         for _, row in df.iterrows():
-            # Build look-up key matching structure inside song_profiles.json
             profile_key = f"{row['album']}|||{row['song']}"
             profile = song_profiles.get(profile_key, {})
             profile_text = get_profile_text(profile)
 
-            # Context Stuffing: Assemble text to convert into vector embeddings
-            # Merges raw lyrics with AI song profiles, enables vector math to evaluate abstract emotional vibes 
+            # This is the text that gets embedded.
+            # It includes song-level POV/timeline context plus the specific lyric chunk.
             document = f"""
-            Song: {row['song']}
-            Album: {row['album']}
-            Section: {row['section']}
+Song: {row['song']}
+Album: {row['album']}
+Section: {row['section']}
 
-            {profile_text}
+{profile_text}
 
-            Lyrics:
-            {row['text']}
-            """.strip()
+Lyrics:
+{row['text']}
+""".strip()
 
             documents.append(document)
 
-            # Metadata Object Mapping: Stored alongside vectors to facilitate frontend display, 
-            # database post-filtering (e.g., filtering by Era), or custom scoring functions
             metadatas.append({
                 "song": row["song"],
                 "album": row["album"],
                 "section": row["section"],
-                "themes": ", ".join(profile.get("themes", [])),
-                "moods": ", ".join(profile.get("moods", [])),
-                "situations": ", ".join(profile.get("situations", [])),
+
+                "themes": list_to_text(profile.get("themes", [])),
+                "moods": list_to_text(profile.get("moods", [])),
+                "situations": list_to_text(profile.get("situations", [])),
+
                 "perspective": profile.get("perspective", ""),
                 "speaker_role": profile.get("speaker_role", ""),
+                "narrator_agency": profile.get("narrator_agency", ""),
+                "narrator_hurt_status": profile.get("narrator_hurt_status", ""),
                 "relationship_stage": profile.get("relationship_stage", ""),
+                "timeline_state": profile.get("timeline_state", ""),
+
+                "good_for_user_roles": list_to_text(profile.get("good_for_user_roles", [])),
+                "bad_for_user_roles": list_to_text(profile.get("bad_for_user_roles", [])),
+
                 "summary": profile.get("summary", "")
             })
 
-            # Append stable calculated unique hex string 
             ids.append(make_chunk_id(row))
 
-        # 6. Database Upsert Operations
-        # Executes an atomic batch insert/update to ChromaDB, generating text vectorizations concurrently
         if documents:
             collection.upsert(
                 documents=documents,
