@@ -66,6 +66,12 @@ def chunk_song(song_title, album, lyrics):
 
         # Else, piece contains lyrics
         else:
+            lines = [line.strip() for line in part.splitlines() if line.strip()]
+
+            # If section contains only 1 line, drop it completely
+            if len(lines) <= 1:
+                continue
+
             chunk_data = {
                 "song": song_title,
                 "album": album,
