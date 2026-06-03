@@ -1,6 +1,10 @@
 pandas
 chromadb
-sentence-transformers
+sentence-transformers==2.7.0
+transformers==4.41.2
+torch==2.2.2
+numpy<2
 openai
 python-dotenv
 streamlit
+typing-extensions
