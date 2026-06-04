@@ -1,7 +1,10 @@
 venv/
 .env
+.streamlit/secrets.toml
+
 __pycache__/
 *.pyc
+.DS_Store
 
 data/raw/
 data/cleaned/
@@ -10,6 +13,8 @@ data/song_profiles.json
 all.txt
 
 swift_vec_db/
+
+app_private.py
 
 logs/
 search_logs*.txt
