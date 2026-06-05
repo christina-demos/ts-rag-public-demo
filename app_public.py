@@ -78,7 +78,7 @@ st.markdown(
 # CHANGE:
 # Added a clear public-demo note so the wait feels intentional, not broken.
 st.caption(
-    "Public demo: lyric text is hidden for copyright reasons. "
+    "Public demo: lyric text is hidden for copyright reasons. Matches are based on song-section metadata, so some results may be less precise."
     "Matching may take up to a minute, especially on the first search."
 )
 
