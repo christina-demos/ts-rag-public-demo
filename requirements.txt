@@ -5,3 +5,4 @@ sentence-transformers
 pandas
 numpy<2
 python-dotenv
+protobuf==3.20.3
